@@ -1,0 +1,179 @@
+diff -ru a/core/arch/arm/mm/core_mmu_lpae.c b/core/arch/arm/mm/core_mmu_lpae.c
+--- a/core/arch/arm/mm/core_mmu_lpae.c	2026-10-30 16:31:36
++++ b/core/arch/arm/mm/core_mmu_lpae.c	2026-10-30 16:33:16
+@@ -284,7 +284,18 @@
+ 	__aligned(XLAT_TABLE_SIZE) __section(".nozi.mmu.l2");
+ 
+ /* MMU L2 table for TAs, one for each thread */
+-static uint64_t xlat_tables_ul1[XLAT_TABLE_SIZE * CFG_NUM_THREADS /
++/*
++ * CFG_USER_VA_SLOTS (optee-llm): the user address space spans this many consecutive level 1
++ * entries, i.e. that many GiB per TA instead of one. Each thread then has as many level 2 tables,
++ * contiguous, so that together they act as one directory of XLAT_TABLE_ENTRIES * CFG_USER_VA_SLOTS
++ * entries and the level 1 descriptor of slot k is that of slot 0 plus k tables. More than one slot
++ * is for AArch64 TAs only: those slots are searched from 4 GiB up, outside the AArch32 TA range.
++ */
++#ifndef CFG_USER_VA_SLOTS
++#define CFG_USER_VA_SLOTS	1
++#endif
++
++static uint64_t xlat_tables_ul1[XLAT_TABLE_SIZE * CFG_NUM_THREADS * CFG_USER_VA_SLOTS /
+ 				XLAT_ENTRY_SIZE]
+ 	__aligned(XLAT_TABLE_SIZE) __section(".nozi.mmu.l2");
+ 
+@@ -533,7 +544,7 @@
+ {
+ 	assert(thread_id < CFG_NUM_THREADS);
+ 
+-	return prtn->l2_ta_tables + XLAT_TABLE_ENTRIES * thread_id;
++	return prtn->l2_ta_tables + XLAT_TABLE_ENTRIES * CFG_USER_VA_SLOTS * thread_id;
+ }
+ 
+ #if (CORE_MMU_BASE_TABLE_LEVEL == 0)
+@@ -565,7 +576,7 @@
+ 	size_t sz = ROUNDUP(BASE_TABLE_SIZE * CFG_TEE_CORE_NB_CORE,
+ 			    SMALL_PAGE_SIZE);
+ 
+-	sz += XLAT_TABLE_SIZE * CFG_NUM_THREADS;
++	sz += XLAT_TABLE_SIZE * CFG_NUM_THREADS * CFG_USER_VA_SLOTS;
+ 	if (!IS_ENABLED(CFG_DYN_CONFIG))
+ 		sz += XLAT_TABLE_SIZE * MAX_XLAT_TABLES;
+ 
+@@ -980,7 +991,31 @@
+ 		assert(tbl);
+ 	}
+ 
++#if CFG_USER_VA_SLOTS > 1
+ 	/*
++	 * CFG_USER_VA_SLOTS consecutive empty level 1 entries from 4GB up
++	 * (AArch64 TAs only).
++	 */
++	{
++		const unsigned int l1_entries = CORE_MMU_BASE_TABLE_LEVEL == 0 ?
++						XLAT_TABLE_ENTRIES :
++						NUM_BASE_LEVEL_ENTRIES;
++		unsigned int k = 0;
++
++		for (n = ARM32_USER_VA_SLOT_LIMIT;
++		     n + CFG_USER_VA_SLOTS <= l1_entries; n++) {
++			for (k = 0; k < CFG_USER_VA_SLOTS; k++)
++				if ((tbl[n + k] & DESC_ENTRY_TYPE_MASK) !=
++				    INVALID_DESC)
++					break;
++			if (k == CFG_USER_VA_SLOTS) {
++				user_va_idx = n;
++				break;
++			}
++		}
++	}
++#else
++	/*
+ 	 * Search level 1 table (i.e. 1GB mapping per entry) for
+ 	 * an empty entry in the range [1GB, 4GB[.
+ 	 */
+@@ -990,6 +1025,7 @@
+ 			break;
+ 		}
+ 	}
++#endif
+ 
+ 	assert(user_va_idx != -1);
+ }
+@@ -1098,7 +1134,7 @@
+ 		boot_mem_add_reloc(&prtn->base_tables);
+ 
+ 		prtn->l2_ta_tables = boot_mem_alloc(XLAT_TABLE_SIZE *
+-						    CFG_NUM_THREADS,
++						    CFG_NUM_THREADS * CFG_USER_VA_SLOTS,
+ 						    XLAT_TABLE_SIZE);
+ 		boot_mem_add_reloc(&prtn->l2_ta_tables);
+ 	}
+@@ -1295,6 +1331,8 @@
+ 
+ 	core_mmu_get_user_va_range(&va_range_base, NULL);
+ 	core_mmu_set_info_table(pgd_info, 2, va_range_base, tbl);
++	/* The thread's CFG_USER_VA_SLOTS contiguous level 2 tables, as one */
++	pgd_info->num_entries = XLAT_TABLE_ENTRIES * CFG_USER_VA_SLOTS;
+ }
+ 
+ void core_mmu_create_user_map(struct user_mode_ctx *uctx,
+@@ -1305,7 +1343,7 @@
+ 	COMPILE_TIME_ASSERT(sizeof(uint64_t) * XLAT_TABLE_ENTRIES == PGT_SIZE);
+ 
+ 	core_mmu_get_user_pgdir(&dir_info);
+-	memset(dir_info.table, 0, PGT_SIZE);
++	memset(dir_info.table, 0, PGT_SIZE * CFG_USER_VA_SLOTS);
+ 	core_mmu_populate_user_map(&dir_info, uctx);
+ 	map->user_map = virt_to_phys(dir_info.table) | TABLE_DESC;
+ 	map->asid = uctx->vm_info.asid;
+@@ -1457,7 +1495,7 @@
+ 	if (base)
+ 		*base = (vaddr_t)user_va_idx << L1_XLAT_ADDRESS_SHIFT;
+ 	if (size)
+-		*size = BIT64(L1_XLAT_ADDRESS_SHIFT);
++		*size = BIT64(L1_XLAT_ADDRESS_SHIFT) * CFG_USER_VA_SLOTS;
+ }
+ 
+ static uint64_t *core_mmu_get_user_mapping_entry(struct mmu_partition *prtn,
+@@ -1514,6 +1552,7 @@
+ 	struct mmu_partition *prtn = get_prtn();
+ 	uint64_t *entries[NUM_BASE_TABLES] = { };
+ 	unsigned int i = 0;
++	unsigned int k = 0;
+ 
+ 	ttbr = read_ttbr0_64bit();
+ 	/* Clear ASID */
+@@ -1526,8 +1565,11 @@
+ 
+ 	/* Set the new map */
+ 	if (map && map->user_map) {
++		/* slot k: the thread's level 2 table k, k tables after slot 0's */
+ 		for (i = 0; i < NUM_BASE_TABLES; i++)
+-			*entries[i] = map->user_map;
++			for (k = 0; k < CFG_USER_VA_SLOTS; k++)
++				entries[i][k] = map->user_map +
++						k * XLAT_TABLE_SIZE;
+ 
+ 		dsb();	/* Make sure the write above is visible */
+ 		ttbr |= ((uint64_t)map->asid << TTBR_ASID_SHIFT);
+@@ -1535,7 +1577,8 @@
+ 		isb();
+ 	} else {
+ 		for (i = 0; i < NUM_BASE_TABLES; i++)
+-			*entries[i] = INVALID_DESC;
++			for (k = 0; k < CFG_USER_VA_SLOTS; k++)
++				entries[i][k] = INVALID_DESC;
+ 
+ 		dsb();	/* Make sure the write above is visible */
+ 	}
+@@ -1605,6 +1648,7 @@
+ 	struct mmu_partition *prtn = get_prtn();
+ 	uint64_t *entries[NUM_BASE_TABLES] = { };
+ 	unsigned int i = 0;
++	unsigned int k = 0;
+ 
+ 	ttbr = read_ttbr0_el1();
+ 	/* Clear ASID */
+@@ -1617,8 +1661,11 @@
+ 
+ 	/* Set the new map */
+ 	if (map && map->user_map) {
++		/* slot k: the thread's level 2 table k, k tables after slot 0's */
+ 		for (i = 0; i < NUM_BASE_TABLES; i++)
+-			*entries[i] = map->user_map;
++			for (k = 0; k < CFG_USER_VA_SLOTS; k++)
++				entries[i][k] = map->user_map +
++						k * XLAT_TABLE_SIZE;
+ 
+ 		dsb();	/* Make sure the write above is visible */
+ 		ttbr |= ((uint64_t)map->asid << TTBR_ASID_SHIFT);
+@@ -1626,7 +1673,8 @@
+ 		isb();
+ 	} else {
+ 		for (i = 0; i < NUM_BASE_TABLES; i++)
+-			*entries[i] = INVALID_DESC;
++			for (k = 0; k < CFG_USER_VA_SLOTS; k++)
++				entries[i][k] = INVALID_DESC;
+ 
+ 		dsb();	/* Make sure the write above is visible */
+ 	}

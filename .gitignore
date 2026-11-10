@@ -1,0 +1,14 @@
+/build/
+*.o
+*.a
+*.ta
+*.elf
+*.map
+*.dmp
+*.stripped.elf
+ta/*.lds
+/examples/*/ta/dyn_list
+/examples/llama/engine/ref
+/examples/llama/host/llama_cli
+/examples/cxx-probe/host/cxxprobe
+/examples/cxx-probe/lib/bench_ref
