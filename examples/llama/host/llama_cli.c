@@ -83,6 +83,7 @@ int main(int argc, char **argv)
 	int n_threads = getenv("LLAMA_THREADS") ? atoi(getenv("LLAMA_THREADS")) : 1;
 	struct timespec t0, t1;
 	uint32_t origin = 0;
+	TEEC_Result res = 0;
 	FILE *f = NULL;
 	long size = 0;
 	long off = 0;
@@ -99,10 +100,13 @@ int main(int argc, char **argv)
 		perror(argv[1]);
 		return 1;
 	}
-	if (TEEC_InitializeContext(NULL, &ctx) != TEEC_SUCCESS ||
-	    TEEC_OpenSession(&ctx, &sess, &uuid, TEEC_LOGIN_PUBLIC, NULL, NULL, &origin) != TEEC_SUCCESS ||
-	    TEEC_AllocateSharedMemory(&ctx, &shm) != TEEC_SUCCESS) {
-		fprintf(stderr, "cannot reach the llama TA\n");
+	res = TEEC_InitializeContext(NULL, &ctx);
+	if (!res)
+		res = TEEC_OpenSession(&ctx, &sess, &uuid, TEEC_LOGIN_PUBLIC, NULL, NULL, &origin);
+	if (!res)
+		res = TEEC_AllocateSharedMemory(&ctx, &shm);
+	if (res) {
+		fprintf(stderr, "cannot reach the llama TA: 0x%x (origin %u)\n", res, origin);
 		return 1;
 	}
 

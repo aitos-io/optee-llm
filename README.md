@@ -74,6 +74,10 @@ flowchart LR
 - The OP-TEE TA dev kit for your platform (`out/<platform>/export-ta_arm64` from your optee_os
   build).
 
+Tested on a Rockchip RK3576 (4× Cortex-A72 + 4× Cortex-A53) with optee_os 4.11.0: the probe
+passes, and Llama 3.2 1B Instruct (Q4_0) in the TA, on 1 and on 4 cores, generates the same tokens
+as `engine/ref` on Linux.
+
 ## Build
 
 ### 1. OP-TEE

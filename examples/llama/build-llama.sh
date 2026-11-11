@@ -6,6 +6,7 @@
 # Usage: ./build-llama.sh [-jN]
 # LLAMA_ARCH=<march>: build for that -march instead of this machine's CPU (GGML_NATIVE), when the
 # build host is not the device, e.g. armv8-a+crc for a Cortex-A53 (no dotprod, no fp16).
+# CMAKE=<path>: a cmake other than the one in PATH.
 set -euo pipefail
 cd "$(dirname "$0")"
 BUILD=${OPTEE_LLM_BUILD:-$(cd ../.. && pwd)/build}
@@ -13,11 +14,12 @@ TAG=b11777
 SHA=f44c041622d88093e3f91f0c81281ea4914c32f6eedc5810a22a534f95c9b377
 SRC=$BUILD/llama.cpp-$TAG
 JOBS=${1:--j$(nproc)}
+CMAKE=${CMAKE:-cmake}
 
 TARBALL=$BUILD/dl/llama.cpp-$TAG.tar.gz
 mkdir -p "$BUILD/dl"
 if [ ! -f "$TARBALL" ]; then
-	curl -fL --retry 3 -o "$TARBALL.part" "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$TAG.tar.gz"
+	curl -fsSL --retry 3 -o "$TARBALL.part" "https://github.com/ggml-org/llama.cpp/archive/refs/tags/$TAG.tar.gz"
 	mv "$TARBALL.part" "$TARBALL"
 fi
 echo "$SHA  $TARBALL" | sha256sum -c --quiet
@@ -44,8 +46,8 @@ build() {
 	shift
 	rm -rf "$out"
 	mkdir -p "$out"
-	cmake -S "$SRC" -B "$out" "$@" "${common[@]}" >"$out/configure.log"
-	cmake --build "$out" --target llama ggml ggml-base ggml-cpu "$JOBS" 2>&1 | tail -n 20
+	"$CMAKE" -S "$SRC" -B "$out" "$@" "${common[@]}" >"$out/configure.log"
+	"$CMAKE" --build "$out" --target llama ggml ggml-base ggml-cpu "$JOBS" 2>&1 | tail -n 20
 }
 build "$BUILD/llama-tee" -DCMAKE_TOOLCHAIN_FILE="$(cd ../../tee-libc && pwd)/toolchain.cmake" \
 	-DTEE_EXTRA_FLAGS=-DGGML_SCHED_MAX_SPLIT_INPUTS=1

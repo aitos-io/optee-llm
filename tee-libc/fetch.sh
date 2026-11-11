@@ -15,7 +15,7 @@ fetch() {
 	local url=$1 sha=$2 file
 	file=$DL/$(basename "$url")
 	if [ ! -f "$file" ]; then
-		curl -fL --retry 3 -o "$file.part" "$url"
+		curl -fsSL --retry 3 -o "$file.part" "$url"
 		mv "$file.part" "$file"
 	fi
 	echo "$sha  $file" | sha256sum -c --quiet
