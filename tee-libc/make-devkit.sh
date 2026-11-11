@@ -1,10 +1,5 @@
 #!/bin/bash
-# Makes tee-libc's copy of the TA dev kit: the same as OP-TEE's export-ta_arm64 except for the link
-# script. OP-TEE 4.11's ta.ld.S gives .rela.got its own output section after the page break, in the
-# RW segment, while .rela.dyn lands in the RX segment. DT_RELASZ then covers both, a range that
-# crosses the gap between segments, and ldelf rejects the TA (TEE_ERROR_BAD_FORMAT). Plain C TAs
-# have hardly any GOT relocations; musl and libstdc++, built -fPIC, have many. The copy keeps all
-# of .rela.got inside .rela.dyn, before the page break.
+# Makes tee-libc's copy of the TA dev kit: OP-TEE's export-ta_arm64 with the two changes below.
 # Usage: ./make-devkit.sh <optee_os>/out/<platform>/export-ta_arm64
 # Output: $BUILD/tee-libc/devkit, the TA_DEV_KIT_DIR for TAs on tee-libc.
 set -euo pipefail
@@ -14,12 +9,6 @@ DST=${OPTEE_LLM_BUILD:-$here/../build}/tee-libc/devkit
 
 rm -rf "$DST"
 cp -a "$SRC" "$DST"
-LDS=$DST/src/ta.ld.S
-sed -i '/^\t\.rela\.got : { \*(\.rela\.got) }$/d' "$LDS"
-sed -i 's|^\t/\* Page align to allow dropping execute bit for RW data \*/$|\t.rela.dyn : { *(.rela.dyn) *(.rela.got) }\n\n&|' "$LDS"
-grep -q '\.rela\.dyn : { \*(\.rela\.dyn) \*(\.rela\.got) }' "$LDS"
-! grep -q '^\t\.rela\.got :' "$LDS"
-
 # libstdc++ has STB_GNU_UNIQUE symbols (static members of templates), so ld marks the TA's
 # EI_OSABI as GNU, and ldelf accepts only ELFOSABI_NONE. Unique binding only matters for
 # de-duplicating across shared objects, and a TA is one static module: reset the byte after linking.

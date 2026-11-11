@@ -146,10 +146,9 @@ API (`tee_mt_*`). `examples/llama/ta/llama_ta.c` shows all of it in about 250 li
 
 ## Things that cost time, so that they don't cost yours
 
-- **Two dev kit fixes** (`make-devkit.sh`): OP-TEE 4.11's link script puts `.rela.got` after the
-  RX/RW page break, so `DT_RELASZ` spans the gap and ldelf rejects `-fPIC` libraries
-  (`TEE_ERROR_BAD_FORMAT`). And libstdc++'s `STB_GNU_UNIQUE` symbols make ld mark the ELF as
-  `ELFOSABI_GNU`, which ldelf also rejects.
+- **ELF OS/ABI** (`make-devkit.sh`): libstdc++'s `STB_GNU_UNIQUE` symbols make ld mark the TA as
+  `ELFOSABI_GNU`, and ldelf rejects it (`TEE_ERROR_BAD_FORMAT`). The dev kit copy resets the
+  byte after linking.
 - **One allocator**: libutils' bget is fine for a few large blocks but far too slow for a
   tokenizer's hundreds of thousands of small ones. The dev kit copy weakens libutils' `malloc`
   family so that musl's mallocng serves the whole TA, `TEE_Malloc` and `operator new` included.
